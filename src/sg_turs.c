@@ -45,7 +45,7 @@
 #include "sg_pr2serr.h"
 
 
-static const char * version_str = "3.56 20230623";
+static const char * version_str = "3.57 20231015";
 
 static const char * my_name = "sg_turs: ";
 
@@ -422,27 +422,25 @@ wait_millisecs(int millisecs)
 }
 #endif
 
-/* Invokes a SCSI TEST UNIT READY command.
- * N.B. To access the sense buffer outside this routine then one be
- * provided by the caller.
+/* Invokes a SCSI TEST UNIT READY command. Assumes CDB set up.
  * 'pack_id' is just for diagnostics, safe to set to 0.
- * Looks for progress indicator if 'progress' non-NULL;
+ * Looks for progress indicator if 'progress_p' non-NULL;
  * if found writes value [0..65535] else write -1.
  * Returns 0 when successful, various SG_LIB_CAT_* positive values or
  * -1 -> other errors */
 static int
 ll_test_unit_ready(struct sg_pt_base * ptvp, int pack_id, int tmo,
-                   int * progress, bool noisy, int verbose)
+                   int * progress_p, bool noisy, int verbose)
 {
     int res, ret, sense_cat;
 
     if (verbose) {
         char b[128];
+        const char * ccp = sg_get_command_str(get_scsi_pt_cdb_buf(ptvp),
+                                              get_scsi_pt_cdb_len(ptvp),
+                                              false, sizeof(b), b);
 
-        pr2serr("    %s cdb: %s\n", tur_s,
-                sg_get_command_str(get_scsi_pt_cdb_buf(ptvp),
-                                   get_scsi_pt_cdb_len(ptvp),
-                                   false, sizeof(b), b));
+        pr2serr("    %s cdb: %s\n", tur_s, ccp);
     }
     if (NULL == ptvp)
         return SCSI_PT_DO_BAD_PARAMS;
@@ -456,12 +454,12 @@ ll_test_unit_ready(struct sg_pt_base * ptvp, int pack_id, int tmo,
         else
             ret = sg_convert_errno(get_scsi_pt_os_err(ptvp));
     } else if (-2 == ret) {
-        if (progress) {
+        if (progress_p) {
             int slen = get_scsi_pt_sense_len(ptvp);
 
             if (! sg_get_sense_progress_fld(get_scsi_pt_sense_buf(ptvp),
-                                            slen, progress))
-                *progress = -1;
+                                            slen, progress_p))
+                *progress_p = -1;
         }
         switch (sense_cat) {
         case SG_LIB_CAT_RECOVERED:
@@ -508,17 +506,17 @@ loop_turs(struct sg_pt_base * ptvp, struct loop_res_t * resp,
     int vb = op->verbose;
     char b[80];
     uint8_t sense_b[64] SG_C_CPP_ZERO_INIT;
+    uint8_t cdb[6] SG_C_CPP_ZERO_INIT;
 
+    set_scsi_pt_cdb(ptvp, cdb, sizeof(cdb));
     if (op->do_low) {
         int rs, n, sense_cat;
-        uint8_t cdb[6];
 
         for (k = 0; k < op->do_number; ++k) {
             if (op->delay > 0)
                 wait_millisecs(op->delay);
             /* Might get Unit Attention on first invocation */
             memset(cdb, 0, sizeof(cdb));    /* TUR's cdb is 6 zeros */
-            set_scsi_pt_cdb(ptvp, cdb, sizeof(cdb));
             set_scsi_pt_sense(ptvp, sense_b, sizeof(sense_b));
             set_scsi_pt_packet_id(ptvp, ++packet_id);
             rs = do_scsi_pt(ptvp, -1, op->tmo, vb);
@@ -538,6 +536,7 @@ loop_turs(struct sg_pt_base * ptvp, struct loop_res_t * resp,
                 case SG_LIB_CAT_NO_SENSE:
                     break;
                 case SG_LIB_CAT_NOT_READY:
+                case SG_LIB_PROGRESS_NOT_READY:
                     ++resp->num_errs;
                     if ((1 == op->do_number) || (op->delay > 0)) {
                         if (! check_for_lu_becoming(ptvp, &ssh)) {
@@ -600,7 +599,8 @@ loop_turs(struct sg_pt_base * ptvp, struct loop_res_t * resp,
                 ++resp->num_errs;
                 resp->ret = res;
                 if ((1 == op->do_number) || (op->delay > 0)) {
-                    if (SG_LIB_CAT_NOT_READY == res) {
+                    if ((SG_LIB_CAT_NOT_READY == res) ||
+                        (SG_LIB_PROGRESS_NOT_READY == res)) {
                         struct sg_scsi_sense_hdr ssh SG_C_CPP_ZERO_INIT;
 
                         if (! check_for_lu_becoming(ptvp, &ssh)) {
@@ -646,7 +646,6 @@ main(int argc, char * argv[])
     struct sg_pt_base * ptvp = NULL;
     struct opts_t opts;
     struct opts_t * op = &opts;
-
 
     memset(op, 0, sizeof(opts));
     op->asc = -1;
@@ -707,6 +706,9 @@ main(int argc, char * argv[])
         goto fini;
     }
     if (op->do_progress) {
+        uint8_t cdb[6] SG_C_CPP_ZERO_INIT;
+
+        set_scsi_pt_cdb(ptvp, cdb, sizeof(cdb));
         for (k = 0; k < op->do_number; ++k) {
             if (op->delay > 0) {
                 if (op->delay_given)

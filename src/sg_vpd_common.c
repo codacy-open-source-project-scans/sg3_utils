@@ -1733,10 +1733,20 @@ decode_block_dev_ch_vpd(const uint8_t * buff, int len, struct opts_t * op,
                    "Force Unit Access Behaviour");
     sgj_haj_vi_nex(jsp, jop, 2, "VBULS", SGJ_SEP_EQUAL_NO_SPACE,
                    !!(buff[8] & 0x1), false,
-                   "Verify Byte check Unmapped Lba Supported");
+                   "Verify Byte check Unmapped LBA Supported");
     u = sg_get_unaligned_be32(buff + 12);
-    sgj_haj_vi_nex(jsp, jop, 2, "DEPOPULATION TIME", SGJ_SEP_COLON_1_SPACE,
-                   u, true, "unit: second");
+    if (jsp->pr_as_json)
+        sgj_js_nv_ihex_nex(jsp, jop, "depopulation_time", u, false,
+                           "unit: second");
+    else {
+        unsigned int min = (u / 60) % 60;
+        unsigned int hour = u / 3600;
+        char d[64] = "seconds";
+
+        if (hour > 0)
+            snprintf(d, sizeof(d), "[h:m %u:%02u]", hour, min);
+        sgj_pr_hr(jsp, "  DEPOPULATION TIME: %u %s\n", u, d);
+    }
 }
 
 static const char * prov_type_arr[8] = {
@@ -2178,6 +2188,9 @@ decode_block_limits_ext_vpd(const uint8_t * buff, int len, struct opts_t * op,
         pr2serr("%s length too short=%d\n", ble_vpdp, len);
         return;
     }
+    sgj_haj_vi_nex(jsp, jop, 2, "RSCS", SGJ_SEP_COLON_1_SPACE,
+                   !!(buff[5] & 0x1), false,
+                   "Reduced Stream Control Supported");
     u = sg_get_unaligned_be16(buff + 6);
     sgj_haj_vistr(jsp, jop, 2, "Maximum number of streams",
                   SGJ_SEP_COLON_1_SPACE, u, true,

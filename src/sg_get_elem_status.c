@@ -38,7 +38,7 @@
  * given SCSI device.
  */
 
-static const char * version_str = "1.23 20230619";      /* sbc5r04 */
+static const char * version_str = "1.25 20231019";      /* sbc5r05 */
 
 #define MY_NAME "sg_get_elem_status"
 
@@ -120,7 +120,8 @@ usage()
             "[--verbose]\n"
             "                           [--version] DEVICE\n"
             "  where:\n"
-            "    --brief|-b        one descriptor per line\n"
+            "    --brief|-b        reduce amount of output, can be used "
+            "several times\n"
             "    --filter=FLT|-f FLT    FLT is 0 (def) for all physical "
             "elements;\n"
             "                           1 for out of spec and depopulated "
@@ -259,7 +260,7 @@ decode_elem_status_desc(const uint8_t * bp, struct gpes_desc_t * pedp)
 }
 
 static bool
-fetch_health_str(uint8_t health, char * bp, int max_blen)
+fetch_health_str(uint8_t health, bool short_str, char * bp, int max_blen)
 {
     bool add_val = false;
     const char * cp = NULL;
@@ -267,23 +268,39 @@ fetch_health_str(uint8_t health, char * bp, int max_blen)
     if  (0 == health)
         cp = "not reported";
     else if (health < 0x64) {
-        cp = "within manufacturer's specification limits";
+        if (short_str)
+            cp = "within mfr's specs";
+        else
+            cp = "within manufacturer's specification limits";
+
         add_val = true;
     } else if (0x64 == health) {
-        cp = "at manufacturer's specification limits";
+        if (short_str)
+            cp = "at mfr's spec limits";
+        else
+            cp = "at manufacturer's specification limits";
         add_val = true;
     } else if (health < 0xd0) {
-        cp = "outside manufacturer's specification limits";
+        if (short_str)
+            cp = "outside mfr's spec limits";
+        else
+            cp = "outside manufacturer's specification limits";
         add_val = true;
     } else if (health < 0xfb) {
         cp = "reserved";
         add_val = true;
     } else if (0xfb == health)
-        cp = "depopulation revocation completed, errors detected";
+        if (short_str)
+            cp = "depop revoc completed, errors detected";
+        else
+            cp = "depopulation revocation completed, errors detected";
     else if (0xfc == health)
         cp = "depopulation revocation in progress";
     else if (0xfd == health)
-        cp = "depopulation completed, errors detected";
+        if (short_str)
+            cp = "depop completed, errors detected";
+        else
+            cp = "depopulation completed, errors detected";
     else if (0xfe == health)
         cp = "depopulation operations in progress";
     else if (0xff == health)
@@ -353,13 +370,16 @@ main(int argc, char * argv[])
     uint8_t * free_gpesBuffp = NULL;
     struct opts_t * op;
     sgj_opaque_p jop = NULL;
-    sgj_opaque_p jo2p;
+    sgj_opaque_p jo2p = NULL;
+    sgj_opaque_p jo3p = NULL;
     sgj_opaque_p jap = NULL;
     sgj_state * jsp;
     struct gpes_desc_t a_ped;
     char b[80];
     struct opts_t opts SG_C_CPP_ZERO_INIT;
     static const int blen = sizeof(b);
+    static const char * gpes_pd_sn =
+                "get_physical_element_status_parameter_data";
     static const char * cmnode_s =
                 "Current maximum number of depopulated elements";
 
@@ -614,6 +634,7 @@ start_response:
         goto fini;
     } else
         op->maxlen -= resid;
+    jo2p = sgj_named_subobject_r(jsp, jop, gpes_pd_sn);
     num_desc = sg_get_unaligned_be32(gpesBuffp + 0);
     if (op->maxlen > 7) {
         num_desc_ret = sg_get_unaligned_be32(gpesBuffp + 4);
@@ -650,19 +671,19 @@ start_response:
         goto fini;
     }
 
-    sgj_haj_vi(jsp, jop, 0, "Number of descriptors",
-               SGJ_SEP_COLON_1_SPACE, num_desc, true);
-    sgj_haj_vi(jsp, jop, 0, "Number of descriptors returned",
-               SGJ_SEP_COLON_1_SPACE, num_desc_ret, true);
-    sgj_haj_vi(jsp, jop, 0, "Identifier of element being depopulated",
+    sgj_haj_vi(jsp, jo2p, 0, "Number of descriptors",
+               SGJ_SEP_COLON_1_SPACE, num_desc, false);
+    sgj_haj_vi(jsp, jo2p, 0, "Number of descriptors returned",
+               SGJ_SEP_COLON_1_SPACE, num_desc_ret, false);
+    sgj_haj_vi(jsp, jo2p, 0, "Identifier of element being depopulated",
                SGJ_SEP_COLON_1_SPACE, id_elem_depop, true);
     if (cur_max_num_depop > 0)
-        sgj_haj_vi(jsp, jop, 0, cmnode_s, SGJ_SEP_COLON_1_SPACE,
+        sgj_haj_vi(jsp, jo2p, 0, cmnode_s, SGJ_SEP_COLON_1_SPACE,
                    cur_max_num_depop, false);
     else
-        sgj_haj_vs(jsp, jop, 0, cmnode_s, SGJ_SEP_COLON_1_SPACE,
+        sgj_haj_vs(jsp, jo2p, 0, cmnode_s, SGJ_SEP_COLON_1_SPACE,
                    "not reported");
-    sgj_haj_vi(jsp, jop, 0, "Current number of depopulated elements",
+    sgj_haj_vi(jsp, jo2p, 0, "Current number of depopulated elements",
                SGJ_SEP_COLON_1_SPACE, cur_num_depop, false);
     if (rlen < 64) {
         sgj_pr_hr(jsp, "No complete physical element status descriptors "
@@ -675,7 +696,7 @@ start_response:
     }
 
     if (jsp->pr_as_json)
-        jap = sgj_named_subarray_r(jsp, jop,
+        jap = sgj_named_subarray_r(jsp, jo2p,
                                    "physical_element_status_descriptor_list");
     for (bp = gpesBuffp + GPES_DESC_OFFSET, k = 0; k < (int)num_desc_ret;
          bp += GPES_DESC_LEN, ++k) {
@@ -683,41 +704,52 @@ start_response:
             sgj_pr_hr(jsp, "Element descriptors:\n");
         decode_elem_status_desc(bp, &a_ped);
         if (jsp->pr_as_json) {
-            jo2p = sgj_new_unattached_object_r(jsp);
-            sgj_js_nv_ihex(jsp, jo2p, "element_identifier",
+            jo3p = sgj_new_unattached_object_r(jsp);
+            sgj_js_nv_ihex(jsp, jo3p, "element_identifier",
                            (int64_t)a_ped.elem_id);
             cp = (1 == a_ped.phys_elem_type) ? "storage" : "reserved";
-            sgj_js_nv_istr(jsp, jo2p, "physical_element_type",
+            sgj_js_nv_istr(jsp, jo3p, "physical_element_type",
                            a_ped.phys_elem_type, "meaning", cp);
             j = a_ped.phys_elem_health;
-            fetch_health_str(j, b, blen);
-            sgj_js_nv_istr(jsp, jo2p, "physical_element_health", j, NULL, b);
-            sgj_js_nv_ihex(jsp, jo2p, "associated_capacity",
+            fetch_health_str(j, false, b, blen);
+            sgj_js_nv_istr(jsp, jo3p, "physical_element_health", j, NULL, b);
+            sgj_js_nv_ihex(jsp, jo3p, "associated_capacity",
                            (int64_t)a_ped.assoc_cap);
-            sgj_js_nv_o(jsp, jap, NULL /* name */, jo2p);
-        } else if (op->do_brief) {
+            sgj_js_nv_o(jsp, jap, NULL /* name */, jo3p);
+        } else if (op->do_brief > 1) {
             sgj_pr_hr(jsp, "%u: %u,%u\n", a_ped.elem_id, a_ped.phys_elem_type,
                       a_ped.phys_elem_health);
         } else {
             char b2[144];
             static const int b2len = sizeof(b2);
 
-            m = sg_scnpr(b2, b2len, "[%d] identifier: 0x%06x", k + 1,
-                         a_ped.elem_id);
-            if (sg_all_ffs((const uint8_t *)&a_ped.assoc_cap, 8))
-                m += sg_scn3pr(b2, b2len, m,
-                               "  associated LBs: not specified;  ");
+            if (op->do_brief > 0)       /* can only be 0 or 1 here */
+                m = sg_scnpr(b2, b2len, "[%d] id: 0x%x", k + 1,
+                             a_ped.elem_id);
             else
-                m += sg_scn3pr(b2, b2len, m, "  associated LBs: 0x%" PRIx64
-                               ";  ", a_ped.assoc_cap);
+                m = sg_scnpr(b2, b2len, "[%d] identifier: 0x%06x", k + 1,
+                             a_ped.elem_id);
+            if (sg_all_ffs((const uint8_t *)&a_ped.assoc_cap, 8)) {
+                if (op->do_brief > 0)
+                    m += sg_scn3pr(b2, b2len, m, "  ");
+                else
+                    m += sg_scn3pr(b2, b2len, m,
+                                   "  associated capacity: not specified;  ");
+            } else
+                m += sg_scn3pr(b2, b2len, m, "  associated capacity: 0x%"
+                               PRIx64 ";  ", a_ped.assoc_cap);
             m += sg_scn3pr(b2, b2len, m, "health: ");
             j = a_ped.phys_elem_health;
-            if (fetch_health_str(j, b, blen))
+            if (fetch_health_str(j, (op->do_brief > 0), b, blen))
                 m += sg_scn3pr(b2, b2len, m, "%s <%d>", b, j);
             else
                 m += sg_scn3pr(b2, b2len, m, "%s", b);
-            if (a_ped.restoration_allowed)
-                sg_scn3pr(b2, b2len, m, " [restoration allowed [RALWD]]");
+            if (a_ped.restoration_allowed) {
+                if (op->do_brief > 0)
+                    sg_scn3pr(b2, b2len, m, " [RALWD]");
+                else
+                    sg_scn3pr(b2, b2len, m, " [restoration allowed [RALWD]]");
+            }
             sgj_pr_hr(jsp, "%s\n", b2);
         }
     }

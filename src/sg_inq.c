@@ -48,12 +48,13 @@
 #include "sg_unaligned.h"
 #include "sg_pr2serr.h"
 #if (HAVE_NVME && (! IGNORE_NVME))
-#include "sg_pt_nvme.h"
+#include "sg_nvme.h"
+#include "sg_snt.h"
 #endif
 
 #include "sg_vpd_common.h"  /* for shared VPD page processing with sg_vpd */
 
-static const char * version_str = "2.52 20231015";  /* spc6r10, sbc5r04 */
+static const char * version_str = "2.54 20231123";  /* spc6r11, sbc5r05 */
 
 #define MY_NAME "sg_inq"
 
@@ -4049,7 +4050,9 @@ show_nvme_id_ctrl(const uint8_t *dinp, struct opts_t * op, sgj_opaque_p jop)
     sgj_opaque_p jo3p = NULL;
     sgj_state * jsp = &op->json_st;
     char b[144];
+    char bb[32];
     static const int blen = sizeof(b);
+    static const int bblen = sizeof(bb);
 
     as_json = jsp->pr_as_json;
     if (as_json)
@@ -4061,8 +4064,8 @@ show_nvme_id_ctrl(const uint8_t *dinp, struct opts_t * op, sgj_opaque_p jop)
     sgj_haj_vs(jsp, jo2p, 2, "Model number", SGJ_SEP_COLON_1_SPACE, b);
     snprintf(b, blen, "%.20s", (const char *)(dinp + 4));
     sgj_haj_vs(jsp, jo2p, 2, "Serial number", SGJ_SEP_COLON_1_SPACE, b);
-    snprintf(b, blen, "%.4s", (const char *)(dinp + 64));
-    sgj_haj_vs(jsp, jo2p, 2, "Firmware revision", SGJ_SEP_COLON_1_SPACE, b);
+    snprintf(bb, bblen, "%.8s", (const char *)(dinp + 64));
+    sgj_haj_vs(jsp, jo2p, 2, "Firmware revision", SGJ_SEP_COLON_1_SPACE, bb);
     ver = sg_get_unaligned_le32(dinp + 80);
     ver_maj = (ver >> 16);
     ver_min = (ver >> 8) & 0xff;
